@@ -38,7 +38,7 @@ async def wait_for_nodes_sync_and_update_token(db: Session, meeting_id: str):
     等待所有节点同步完成后更新会议状态识别码
 
     此函数作为后台任务运行，等待所有节点同步完成指定会议的数据后，
-    更新会议状态识别码，以通知前端刷新会议数据。
+    额外等待3秒，然后更新会议状态识别码，以通知前端刷新会议数据。
 
     如果在最大等待时间内节点未能完成同步，将强制更新会议状态识别码。
 
@@ -60,10 +60,24 @@ async def wait_for_nodes_sync_and_update_token(db: Session, meeting_id: str):
             # 检查是否所有节点都已同步
             if is_meeting_fully_synced(meeting_id):
                 print(f"[同步等待] 会议 {meeting_id} 的所有节点已完成同步")
-                # 更新会议状态识别码
-                crud.update_meeting_change_status_token(db_session)
-                print(f"[同步等待] 会议 {meeting_id} 的状态识别码已更新")
-                break
+
+                # 检查会议包是否已生成
+                meeting = crud.get_meeting(db_session, meeting_id=meeting_id)
+                if meeting and meeting.package_path and os.path.exists(meeting.package_path):
+                    print(f"[同步等待] 会议 {meeting_id} 的文件包已生成，路径: {meeting.package_path}")
+
+                    # 额外等待3秒，确保客户端有足够时间获取最新的会议包
+                    print(f"[同步等待] 会议 {meeting_id} 额外等待3秒，确保客户端有足够时间获取最新的会议包")
+                    await asyncio.sleep(3)
+
+                    # 更新会议状态识别码
+                    crud.update_meeting_change_status_token(db_session)
+                    print(f"[同步等待] 会议 {meeting_id} 的状态识别码已更新")
+                    break
+                else:
+                    print(f"[同步等待] 会议 {meeting_id} 的文件包尚未生成，继续等待")
+                    await asyncio.sleep(2)  # 等待2秒后再次检查
+                    continue
 
             # 检查是否超时
             elapsed_time = time.time() - start_time
@@ -788,8 +802,8 @@ async def get_meeting_package(meeting_id: str, db: Session = Depends(get_db)):
 @router.get("/{meeting_id}/download-package")
 async def download_meeting_package(meeting_id: str, db: Session = Depends(get_db)):
     """
-    下载会议的JPG文件包，打包为ZIP格式
-    仅包含会议的JPG图片文件，不包含PDF文件
+    下载会议的PDF文件包，打包为ZIP格式
+    包含会议的所有PDF文件
     适用于平板客户端查看
 
     Args:
@@ -803,7 +817,7 @@ async def download_meeting_package(meeting_id: str, db: Session = Depends(get_db
 
     # 准备文件名 - 使用ASCII字符确保兼容性
     # 仅使用会议ID作为文件名，避免中文字符编码问题
-    zip_filename = f"meeting_{meeting_id}_jpgs.zip"
+    zip_filename = f"meeting_{meeting_id}_pdfs.zip"
 
     # 准备响应
     headers = {
@@ -902,7 +916,7 @@ async def download_active_meeting_package(meeting_id: str, db: Session = Depends
 
     # 准备文件名 - 使用ASCII字符确保兼容性
     # 仅使用会议ID作为文件名，避免中文字符编码问题
-    zip_filename = f"meeting_{meeting_id}_jpgs.zip"
+    zip_filename = f"meeting_{meeting_id}_pdfs.zip"
 
     # 准备响应
     headers = {
